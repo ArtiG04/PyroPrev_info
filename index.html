@@ -123,6 +123,36 @@ function pushPoint(ts, raw, avg, t, h) {
   hChart.update();
 }
 
+/* ---------- UI helpers ---------- */
+function setButtonsConnected(connected) {
+  document.getElementById('btnSnap').disabled = !connected;
+  document.getElementById('btnCalibMQ').disabled = !connected;
+  document.getElementById('btnCalibEnv').disabled = !connected;
+  document.getElementById('btnCalibAll').disabled = !connected;
+  const btnConnect = document.getElementById('btnConnect');
+  if (connected) {
+    btnConnect.innerText = 'Desconectar';
+  } else {
+    btnConnect.innerText = 'Conectar BLE';
+  }
+}
+
+/* ---------- desconexión ---------- */
+function onDisconnected(evt) {
+  console.log('Device disconnected (onDisconnected)', evt);
+  document.getElementById('status').innerText = 'Desconectado';
+  setButtonsConnected(false);
+  // limpiar referencias para que un nuevo connect funcione correctamente
+  try {
+    if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
+  } catch (e) {}
+  device = null;
+  server = null;
+  service = null;
+  dataChar = null;
+  cmdChar = null;
+}
+
 /* ---------- BLE: conexión, notifs, comandos ---------- */
 async function connectBLE() {
   try {
@@ -140,6 +170,11 @@ async function connectBLE() {
         acceptAllDevices: true,
         optionalServices: [SERVICE_UUID]
       });
+    }
+
+    if (!device) {
+      document.getElementById('status').innerText = 'No se seleccionó ningún dispositivo';
+      return;
     }
 
     // manejar desconexión
@@ -163,7 +198,7 @@ async function connectBLE() {
       console.log('startNotifications OK on dataChar');
     } catch (errStart) {
       console.error('startNotifications failed:', errStart);
-      document.getElementById('status').innerText = 'Error startNotifications: ' + errStart;
+      document.getElementById('status').innerText = 'Error startNotifications: ' + (errStart && errStart.message ? errStart.message : errStart);
       setButtonsConnected(false);
       return;
     }
@@ -178,20 +213,25 @@ async function connectBLE() {
   }
 }
 
+/* handleDataNotification - decoding robusto */
 function handleDataNotification(event) {
   try {
-    // event.target.value is a DataView
+    // event.target.value is a DataView or BluetoothRemoteGATTCharacteristicValueEvent
     const value = event.target.value;
-    // prefer decode from buffer
     let jsonStr = '';
-    try {
+
+    // Try direct buffer decode
+    if (value && value.buffer) {
       jsonStr = new TextDecoder().decode(value.buffer);
-    } catch (e) {
-      // fallback byte by byte
-      const arr = new Uint8Array(value.byteLength);
-      for (let i=0;i<value.byteLength;i++) arr[i] = value.getUint8(i);
+    } else {
+      // fallback: build Uint8Array
+      const arr = new Uint8Array(value.byteLength || 0);
+      for (let i=0;i<(value.byteLength || 0);i++) arr[i] = value.getUint8(i);
       jsonStr = new TextDecoder().decode(arr);
     }
+
+    // quick sanity
+    if (!jsonStr || jsonStr.length < 2) return;
 
     console.log('Notification raw:', jsonStr);
 
@@ -216,7 +256,7 @@ function handleDataNotification(event) {
 
 /* sendCmd: escribe comando sencillo (MQ/ENV/ALL/SNAP) */
 async function sendCmd(cmd) {
-  if (!cmdChar) { console.warn('No cmd characteristic'); return; }
+  if (!cmdChar) { console.warn('No cmd characteristic'); document.getElementById('status').innerText = 'Sin característica CMD'; return; }
   try {
     const enc = new TextEncoder();
     await cmdChar.writeValue(enc.encode(cmd));
@@ -229,12 +269,23 @@ async function sendCmd(cmd) {
 }
 
 /* ---------- UI wiring ---------- */
-document.getElementById('btnConnect').addEventListener('click', async ()=>{
-  if (!navigator.bluetooth) {
-    alert('Web Bluetooth no soportado en este navegador. Usa Chrome en Android.');
-    return;
+document.getElementById('btnConnect').addEventListener('click', async ()=> {
+  // toggle: si ya hay conexión, desconectar; si no, conectar
+  try {
+    if (device && device.gatt && device.gatt.connected) {
+      device.gatt.disconnect();
+      // onDisconnected handler will run
+      document.getElementById('status').innerText = 'Desconectando...';
+      return;
+    }
+    if (!navigator.bluetooth) {
+      alert('Web Bluetooth no soportado en este navegador. Usa Chrome en Android.');
+      return;
+    }
+    await connectBLE();
+  } catch (e) {
+    console.error('btnConnect error', e);
   }
-  await connectBLE();
 });
 
 document.getElementById('btnSnap').addEventListener('click', ()=> sendCmd('SNAP'));
@@ -252,10 +303,11 @@ document.getElementById('btnCalibAll').addEventListener('click', ()=> {
 makeCharts();
 setButtonsConnected(false);
 
+// desconectar al cerrar la pestaña (limpia publicidad BLE y conexiones)
+window.addEventListener('beforeunload', () => {
+  try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){}
+});
+
 </script>
 </body>
 </html>
-
-
-
-
