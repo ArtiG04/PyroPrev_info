@@ -1,0 +1,248 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>PyroPrev BLE Monitor</title>
+
+  <!-- Chart.js desde CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#2b7cff"/>
+
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:8px;background:#fafafa;color:#111}
+    header{display:flex;align-items:center;gap:12px}
+    h3{margin:0 0 8px 0}
+    .controls{margin:10px 0}
+    button{margin-right:6px;padding:8px 12px;border-radius:6px;border:1px solid #ccc;background:#fff}
+    button:disabled{opacity:0.5}
+    canvas{max-width:100%;background:#fff;border:1px solid #e6e6e6;border-radius:6px;padding:6px}
+    .status{margin-left:8px;font-weight:600}
+    .card{margin-bottom:12px}
+    footer{font-size:12px;margin-top:10px;color:#666}
+  </style>
+</head>
+<body>
+  <header>
+    <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' rx='6' fill='%232b7cff'/><text x='50%' y='55%' font-size='20' fill='white' text-anchor='middle' font-family='Arial' font-weight='bold'>P</text></svg>" alt="logo" width="40" height="40">
+    <div>
+      <h3>PyroPrev BLE Monitor</h3>
+      <div style="font-size:13px;color:#555">Conectar a tu ESP32 vía BLE (Chrome Android)</div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <button id="btnConnect">Conectar BLE</button>
+    <button id="btnSnap" disabled>Snap</button>
+    <button id="btnCalibMQ" disabled>Calibrar MQ</button>
+    <button id="btnCalibEnv" disabled>Calibrar Temp/Hum</button>
+    <button id="btnCalibAll" disabled>Calibrar Todo</button>
+    <span class="status" id="status">Desconectado</span>
+  </div>
+
+  <div class="card"><h4>MQ (RAW + AVG)</h4><canvas id="mqChart" height="180"></canvas></div>
+  <div class="card"><h4>Temperatura (°C)</h4><canvas id="tChart" height="120"></canvas></div>
+  <div class="card"><h4>Humedad (%)</h4><canvas id="hChart" height="120"></canvas></div>
+
+  <footer>
+    Tips: usa Chrome en Android. Si la página falla al intentar acceder a BLE, revisa que el Bluetooth esté activado y que el navegador tenga permisos (ubicación). Para instalar la app en el móvil sirve la página con HTTPS y luego elige "Añadir a pantalla de inicio".
+  </footer>
+
+<script>
+/* ---------- CONFIG (coincidir con ESP32) ---------- */
+const SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
+const DATA_UUID    = '12345678-1234-5678-1234-56789abcdef1';
+const CMD_UUID     = '12345678-1234-5678-1234-56789abcdef2';
+
+/* ---------- ESTADO ---------- */
+let device = null;
+let server = null;
+let service = null;
+let dataChar = null;
+let cmdChar = null;
+
+let mqChart, tChart, hChart;
+const MAX_POINTS = 200;
+let labels = [], mqRawArr = [], mqAvgArr = [], tempArr = [], humArr = [];
+let baseline = 0, threshold = 0;
+
+/* ---------- GRÁFICOS ---------- */
+function makeCharts(){
+  const ctxM = document.getElementById('mqChart').getContext('2d');
+  mqChart = new Chart(ctxM, {
+    type:'line',
+    data:{
+      labels: labels,
+      datasets:[
+        { label:'RAW_MQ',  data: mqRawArr, borderColor:'rgba(255,99,132,1)', fill:false, pointRadius:1 },
+        { label:'AVG_MQ',  data: mqAvgArr, borderColor:'rgba(54,162,235,1)', fill:false, pointRadius:1 },
+        { label:'BASELINE',data: [],       borderColor:'rgba(0,0,0,0.6)', borderDash:[6,4], fill:false, pointRadius:0 },
+        { label:'THRESHOLD',data: [],      borderColor:'rgba(0,0,0,0.8)', borderDash:[2,2], fill:false, pointRadius:0 }
+      ]
+    },
+    options:{ animation:false, scales:{ x:{ display:true }, y:{ display:true } }, plugins:{legend:{display:true}}}
+  });
+
+  const ctxT = document.getElementById('tChart').getContext('2d');
+  tChart = new Chart(ctxT, {
+    type:'line',
+    data:{ labels: labels, datasets:[{ label:'Temp (°C)', data: tempArr, borderColor:'rgba(255,159,64,1)', fill:false, pointRadius:1 }]},
+    options:{ animation:false }
+  });
+
+  const ctxH = document.getElementById('hChart').getContext('2d');
+  hChart = new Chart(ctxH, {
+    type:'line',
+    data:{ labels: labels, datasets:[{ label:'Hum (%)', data: humArr, borderColor:'rgba(75,192,192,1)', fill:false, pointRadius:1 }]},
+    options:{ animation:false }
+  });
+}
+
+function pushPoint(ts, raw, avg, t, h) {
+  const tstr = new Date(ts*1000).toLocaleTimeString();
+  labels.push(tstr);
+  mqRawArr.push(raw);
+  mqAvgArr.push(avg);
+  tempArr.push(t);
+  humArr.push(h);
+  if (labels.length > MAX_POINTS) {
+    labels.shift(); mqRawArr.shift(); mqAvgArr.shift(); tempArr.shift(); humArr.shift();
+  }
+  // actualizar baseline/threshold
+  const n = labels.length;
+  mqChart.data.datasets[2].data = Array(n).fill(baseline);
+  mqChart.data.datasets[3].data = Array(n).fill(threshold);
+
+  mqChart.update();
+  tChart.update();
+  hChart.update();
+}
+
+/* ---------- BLE: conexión, notifs, comandos ---------- */
+async function connectBLE() {
+  try {
+    document.getElementById('status').innerText = 'Buscando PyroPrev (BLE)...';
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'PyroPrev' }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    // manejar desconexión
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+
+    document.getElementById('status').innerText = 'Conectando...';
+    server = await device.gatt.connect();
+    service = await server.getPrimaryService(SERVICE_UUID);
+    dataChar = await service.getCharacteristic(DATA_UUID);
+    cmdChar = await service.getCharacteristic(CMD_UUID);
+
+    // iniciar notificaciones
+    await dataChar.startNotifications();
+    dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
+
+    document.getElementById('status').innerText = 'Conectado: ' + (device.name || '(sin nombre)');
+    setButtonsConnected(true);
+  } catch (err) {
+    console.error('connectBLE error', err);
+    document.getElementById('status').innerText = 'Error conexión: ' + (err && err.message ? err.message : err);
+    setButtonsConnected(false);
+  }
+}
+
+function onDisconnected(evt) {
+  console.log('Device disconnected', evt);
+  document.getElementById('status').innerText = 'Desconectado';
+  setButtonsConnected(false);
+  device = null;
+  server = null;
+  service = null;
+  dataChar = null;
+  cmdChar = null;
+}
+
+function setButtonsConnected(connected) {
+  document.getElementById('btnSnap').disabled = !connected;
+  document.getElementById('btnCalibMQ').disabled = !connected;
+  document.getElementById('btnCalibEnv').disabled = !connected;
+  document.getElementById('btnCalibAll').disabled = !connected;
+}
+
+/* handleDataNotification - decoding robusto */
+function handleDataNotification(event) {
+  try {
+    // event.target.value is a DataView; use buffer for decoding
+    const value = event.target.value;
+    let jsonStr;
+    // Some browsers accept TextDecoder on DataView, but using buffer is safest:
+    try {
+      jsonStr = new TextDecoder().decode(value.buffer);
+    } catch (e) {
+      // fallback: build Uint8Array
+      const arr = new Uint8Array(value.byteLength);
+      for (let i=0;i<value.byteLength;i++) arr[i]=value.getUint8(i);
+      jsonStr = new TextDecoder().decode(arr);
+    }
+
+    const data = JSON.parse(jsonStr);
+    // actualizar baseline/threshold si vienen
+    if (typeof data.baseline === 'number') baseline = data.baseline;
+    if (typeof data.threshold === 'number') threshold = data.threshold;
+
+    // Empujar punto (usar campos con fallback)
+    const ts = (typeof data.ts === 'number') ? data.ts : Math.floor(Date.now()/1000);
+    const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : 0;
+    const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : 0;
+    const temp = (typeof data.temp === 'number') ? data.temp : 0;
+    const hum  = (typeof data.hum === 'number') ? data.hum : 0;
+
+    pushPoint(ts, raw, avg, temp, hum);
+  } catch (err) {
+    console.warn('notification parse error', err);
+  }
+}
+
+/* sendCmd: escribe comando sencillo (MQ/ENV/ALL/SNAP) */
+async function sendCmd(cmd) {
+  if (!cmdChar) { console.warn('No cmd characteristic'); return; }
+  try {
+    const enc = new TextEncoder();
+    await cmdChar.writeValue(enc.encode(cmd));
+    // feedback
+    document.getElementById('status').innerText = 'Comando enviado: ' + cmd;
+  } catch (err) {
+    console.error('sendCmd error', err);
+    document.getElementById('status').innerText = 'Error enviando cmd';
+  }
+}
+
+/* ---------- UI wiring ---------- */
+document.getElementById('btnConnect').addEventListener('click', async ()=>{
+  if (!navigator.bluetooth) {
+    alert('Web Bluetooth no soportado en este navegador. Usa Chrome en Android.');
+    return;
+  }
+  await connectBLE();
+});
+
+document.getElementById('btnSnap').addEventListener('click', ()=> sendCmd('SNAP'));
+document.getElementById('btnCalibMQ').addEventListener('click', ()=> {
+  if (confirm('Calibrar MQ en AIRE LIMPIO?')) sendCmd('MQ');
+});
+document.getElementById('btnCalibEnv').addEventListener('click', ()=> {
+  if (confirm('Calibrar Temp/Hum?')) sendCmd('ENV');
+});
+document.getElementById('btnCalibAll').addEventListener('click', ()=> {
+  if (confirm('Calibrar TODO (MQ + Temp/Hum)?')) sendCmd('ALL');
+});
+
+/* ---------- Init ---------- */
+makeCharts();
+setButtonsConnected(false);
+
+</script>
+</body>
+</html>
+
