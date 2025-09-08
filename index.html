@@ -127,26 +127,50 @@ function pushPoint(ts, raw, avg, t, h) {
 async function connectBLE() {
   try {
     document.getElementById('status').innerText = 'Buscando PyroPrev (BLE)...';
-    device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'PyroPrev' }],
-      optionalServices: [SERVICE_UUID]
-    });
+
+    // Intentar con filtro (mejor), si no funciona cambia a acceptAllDevices (fallback)
+    try {
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'PyroPrev' }],
+        optionalServices: [SERVICE_UUID]
+      });
+    } catch (errFilter) {
+      console.warn('No encontrado con filtro, reintentando con acceptAllDevices', errFilter);
+      device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [SERVICE_UUID]
+      });
+    }
 
     // manejar desconexión
     device.addEventListener('gattserverdisconnected', onDisconnected);
 
     document.getElementById('status').innerText = 'Conectando...';
     server = await device.gatt.connect();
+
+    // debug info
+    console.log('GATT connected:', server.connected, 'device:', device.name, device.id);
+
     service = await server.getPrimaryService(SERVICE_UUID);
+
     dataChar = await service.getCharacteristic(DATA_UUID);
-    cmdChar = await service.getCharacteristic(CMD_UUID);
+    cmdChar  = await service.getCharacteristic(CMD_UUID);
 
     // iniciar notificaciones
-    await dataChar.startNotifications();
-    dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
+    try {
+      await dataChar.startNotifications();
+      dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
+      console.log('startNotifications OK on dataChar');
+    } catch (errStart) {
+      console.error('startNotifications failed:', errStart);
+      document.getElementById('status').innerText = 'Error startNotifications: ' + errStart;
+      setButtonsConnected(false);
+      return;
+    }
 
     document.getElementById('status').innerText = 'Conectado: ' + (device.name || '(sin nombre)');
     setButtonsConnected(true);
+    console.log('BLE fully connected and notifications started.');
   } catch (err) {
     console.error('connectBLE error', err);
     document.getElementById('status').innerText = 'Error conexión: ' + (err && err.message ? err.message : err);
@@ -154,46 +178,29 @@ async function connectBLE() {
   }
 }
 
-function onDisconnected(evt) {
-  console.log('Device disconnected', evt);
-  document.getElementById('status').innerText = 'Desconectado';
-  setButtonsConnected(false);
-  device = null;
-  server = null;
-  service = null;
-  dataChar = null;
-  cmdChar = null;
-}
-
-function setButtonsConnected(connected) {
-  document.getElementById('btnSnap').disabled = !connected;
-  document.getElementById('btnCalibMQ').disabled = !connected;
-  document.getElementById('btnCalibEnv').disabled = !connected;
-  document.getElementById('btnCalibAll').disabled = !connected;
-}
-
-/* handleDataNotification - decoding robusto */
 function handleDataNotification(event) {
   try {
-    // event.target.value is a DataView; use buffer for decoding
+    // event.target.value is a DataView
     const value = event.target.value;
-    let jsonStr;
-    // Some browsers accept TextDecoder on DataView, but using buffer is safest:
+    // prefer decode from buffer
+    let jsonStr = '';
     try {
       jsonStr = new TextDecoder().decode(value.buffer);
     } catch (e) {
-      // fallback: build Uint8Array
+      // fallback byte by byte
       const arr = new Uint8Array(value.byteLength);
-      for (let i=0;i<value.byteLength;i++) arr[i]=value.getUint8(i);
+      for (let i=0;i<value.byteLength;i++) arr[i] = value.getUint8(i);
       jsonStr = new TextDecoder().decode(arr);
     }
 
+    console.log('Notification raw:', jsonStr);
+
     const data = JSON.parse(jsonStr);
+
     // actualizar baseline/threshold si vienen
     if (typeof data.baseline === 'number') baseline = data.baseline;
     if (typeof data.threshold === 'number') threshold = data.threshold;
 
-    // Empujar punto (usar campos con fallback)
     const ts = (typeof data.ts === 'number') ? data.ts : Math.floor(Date.now()/1000);
     const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : 0;
     const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : 0;
@@ -201,6 +208,7 @@ function handleDataNotification(event) {
     const hum  = (typeof data.hum === 'number') ? data.hum : 0;
 
     pushPoint(ts, raw, avg, temp, hum);
+    document.getElementById('status').innerText = 'Última lectura: ' + new Date(ts*1000).toLocaleTimeString();
   } catch (err) {
     console.warn('notification parse error', err);
   }
@@ -247,6 +255,7 @@ setButtonsConnected(false);
 </script>
 </body>
 </html>
+
 
 
 
