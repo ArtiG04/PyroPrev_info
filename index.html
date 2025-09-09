@@ -20,6 +20,7 @@
     .status{margin-left:8px;font-weight:600}
     .card{margin-bottom:12px}
     footer{font-size:12px;margin-top:10px;color:#666}
+    .debug-box{white-space:pre-wrap;font-family:monospace;background:#fff;border:1px solid #eee;padding:8px;height:120px;overflow:auto;border-radius:6px;margin-top:8px}
   </style>
 </head>
 <body>
@@ -37,12 +38,19 @@
     <button id="btnCalibMQ" disabled>Calibrar MQ</button>
     <button id="btnCalibEnv" disabled>Calibrar Temp/Hum</button>
     <button id="btnCalibAll" disabled>Calibrar Todo</button>
+    <button id="btnTestData">Test Data</button>
+    <label style="margin-left:6px"><input type="checkbox" id="chkShowRaw"> Mostrar RAW</label>
     <span class="status" id="status">Desconectado</span>
   </div>
 
   <div class="card"><h4>MQ (RAW + AVG)</h4><canvas id="mqChart" height="180"></canvas></div>
   <div class="card"><h4>Temperatura (°C)</h4><canvas id="tChart" height="120"></canvas></div>
   <div class="card"><h4>Humedad (%)</h4><canvas id="hChart" height="120"></canvas></div>
+
+  <div style="margin-top:8px">
+    <strong>Debug (últimos fragments):</strong>
+    <div class="debug-box" id="debugBox"></div>
+  </div>
 
   <footer>
     Página web de Arti Technologies. Copyright 2025.
@@ -68,6 +76,16 @@ let baseline = 0, threshold = 0;
 /* BUFFER para reensamblar notificaciones fragmentadas */
 let pendingNotif = '';
 
+/* Debug UI */
+const debugBox = () => document.getElementById('debugBox');
+function appendDebug(msg) {
+  const box = debugBox();
+  const time = new Date().toLocaleTimeString();
+  box.textContent = `[${time}] ${msg}\n` + box.textContent;
+  // limitar tamaño
+  if (box.textContent.length > 20000) box.textContent = box.textContent.slice(0, 20000);
+}
+
 /* Charts */
 function makeCharts(){
   const ctxM = document.getElementById('mqChart').getContext('2d');
@@ -76,10 +94,10 @@ function makeCharts(){
     data:{
       labels: labels,
       datasets:[
-        { label:'RAW_MQ',  data: mqRawArr, borderColor:'rgba(255,99,132,1)', fill:false, pointRadius:1 },
-        { label:'AVG_MQ',  data: mqAvgArr, borderColor:'rgba(54,162,235,1)', fill:false, pointRadius:1 },
-        { label:'BASELINE',data: [],       borderColor:'rgba(0,0,0,0.6)', borderDash:[6,4], fill:false, pointRadius:0 },
-        { label:'THRESHOLD',data: [],      borderColor:'rgba(0,0,0,0.8)', borderDash:[2,2], fill:false, pointRadius:0 }
+        { label:'RAW_MQ',  data: mqRawArr, borderColor:'rgba(255,99,132,1)', fill:false, pointRadius:1, spanGaps:false },
+        { label:'AVG_MQ',  data: mqAvgArr, borderColor:'rgba(54,162,235,1)', fill:false, pointRadius:1, spanGaps:false },
+        { label:'BASELINE',data: [],       borderColor:'rgba(0,0,0,0.6)', borderDash:[6,4], fill:false, pointRadius:0, spanGaps:true },
+        { label:'THRESHOLD',data: [],      borderColor:'rgba(0,0,0,0.8)', borderDash:[2,2], fill:false, pointRadius:0, spanGaps:true }
       ]
     },
     options:{ animation:false, scales:{ x:{ display:true }, y:{ display:true } }, plugins:{legend:{display:true}}}
@@ -88,35 +106,48 @@ function makeCharts(){
   const ctxT = document.getElementById('tChart').getContext('2d');
   tChart = new Chart(ctxT, {
     type:'line',
-    data:{ labels: labels, datasets:[{ label:'Temp (°C)', data: tempArr, borderColor:'rgba(255,159,64,1)', fill:false, pointRadius:1 }]},
+    data:{ labels: labels, datasets:[{ label:'Temp (°C)', data: tempArr, borderColor:'rgba(255,159,64,1)', fill:false, pointRadius:1, spanGaps:false }]},
     options:{ animation:false }
   });
 
   const ctxH = document.getElementById('hChart').getContext('2d');
   hChart = new Chart(ctxH, {
     type:'line',
-    data:{ labels: labels, datasets:[{ label:'Hum (%)', data: humArr, borderColor:'rgba(75,192,192,1)', fill:false, pointRadius:1 }]},
+    data:{ labels: labels, datasets:[{ label:'Hum (%)', data: humArr, borderColor:'rgba(75,192,192,1)', fill:false, pointRadius:1, spanGaps:false }]},
     options:{ animation:false }
   });
 }
 
 function pushPoint(ts, raw, avg, t, h) {
+  // normalizar tipos: permitir null para temp/hum (Chart.js dibuja gap)
+  const rawNum = (raw === null || raw === undefined) ? null : Number(raw);
+  const avgNum = (avg === null || avg === undefined) ? null : Number(avg);
+  const tNum = (t === null || t === undefined) ? null : Number(t);
+  const hNum = (h === null || h === undefined) ? null : Number(h);
+
   const tstr = new Date(ts*1000).toLocaleTimeString();
   labels.push(tstr);
-  mqRawArr.push(raw);
-  mqAvgArr.push(avg);
-  tempArr.push(t);
-  humArr.push(h);
+  mqRawArr.push(rawNum);
+  mqAvgArr.push(avgNum);
+  tempArr.push(tNum);
+  humArr.push(hNum);
+
   if (labels.length > MAX_POINTS) {
-    labels.shift(); mqRawArr.shift(); mqAvgArr.shift(); tempArr.shift(); humArr.shift();
+    labels.shift();
+    mqRawArr.shift();
+    mqAvgArr.shift();
+    tempArr.shift();
+    humArr.shift();
   }
+
   const n = labels.length;
   mqChart.data.datasets[2].data = Array(n).fill(baseline);
   mqChart.data.datasets[3].data = Array(n).fill(threshold);
 
-  mqChart.update();
-  tChart.update();
-  hChart.update();
+  // Forzar actualización eficiente
+  mqChart.update('none');
+  tChart.update('none');
+  hChart.update('none');
 }
 
 /* UI helpers */
@@ -127,11 +158,13 @@ function setButtonsConnected(connected) {
   document.getElementById('btnCalibAll').disabled = !connected;
   const btnConnect = document.getElementById('btnConnect');
   btnConnect.innerText = connected ? 'Desconectar' : 'Conectar BLE';
+  document.getElementById('status').innerText = connected ? 'Conectado' : 'Desconectado';
 }
 
 /* disconnect handler */
 function onDisconnected(evt) {
   console.log('Device disconnected', evt);
+  appendDebug('GATT disconnected');
   document.getElementById('status').innerText = 'Desconectado';
   setButtonsConnected(false);
   try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){}
@@ -149,6 +182,7 @@ async function connectBLE() {
       });
     } catch (errFilter) {
       console.warn('Filtro no encontró dispositivo, reintentando acceptAllDevices', errFilter);
+      appendDebug('Filtro no encontró dispositivo, reintentando acceptAllDevices');
       device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [SERVICE_UUID]
@@ -159,6 +193,7 @@ async function connectBLE() {
     document.getElementById('status').innerText = 'Conectando...';
     server = await device.gatt.connect();
     console.log('GATT connected:', server.connected, device.name, device.id);
+    appendDebug('GATT connected: ' + (device.name||device.id));
 
     service = await server.getPrimaryService(SERVICE_UUID);
     dataChar = await service.getCharacteristic(DATA_UUID);
@@ -167,11 +202,13 @@ async function connectBLE() {
     await dataChar.startNotifications();
     dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
     console.log('startNotifications OK on dataChar');
+    appendDebug('startNotifications OK on dataChar');
 
     document.getElementById('status').innerText = 'Conectado: ' + (device.name || '(sin nombre)');
     setButtonsConnected(true);
   } catch (err) {
     console.error('connectBLE error', err);
+    appendDebug('connectBLE error: ' + (err && err.message ? err.message : err));
     document.getElementById('status').innerText = 'Error conexión: ' + (err && err.message ? err.message : err);
     setButtonsConnected(false);
   }
@@ -188,6 +225,12 @@ function handleDataNotification(event)
     const arr = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     const fragment = new TextDecoder().decode(arr);
 
+    // DEBUG opcional: mostrar fragment si checkbox activado
+    if (document.getElementById('chkShowRaw').checked) {
+      appendDebug('Fragment (len=' + arr.length + '): ' + JSON.stringify(fragment));
+      console.log('Fragment received (len=' + arr.length + '):', fragment);
+    }
+
     // append al buffer
     pendingNotif += fragment;
 
@@ -199,28 +242,34 @@ function handleDataNotification(event)
       let jsonStr = parts[i].trim();
       if (!jsonStr) continue;
 
-      // --- NUEVO: saneo de posibles valores ilegales ---
+      // --- saneo de posibles valores ilegales ---
       jsonStr = jsonStr
         .replace(/\bNaN\b/gi, 'null')
         .replace(/\bInfinity\b/gi, 'null')
         .replace(/\b-Infinity\b/gi, 'null');
 
+      // log sanitized line (si debug activo)
+      if (document.getElementById('chkShowRaw').checked) appendDebug('Sanitized: ' + jsonStr);
+
       try {
         const data = JSON.parse(jsonStr);
+        if (document.getElementById('chkShowRaw').checked) console.log('Parsed data:', data);
 
         if (typeof data.baseline === 'number') baseline = data.baseline;
         if (typeof data.threshold === 'number') threshold = data.threshold;
 
+        // mantener null para temp/hum si no son números (Chart.js dibuja gaps)
         const ts = (typeof data.ts === 'number') ? data.ts : Math.floor(Date.now()/1000);
-        const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : 0;
-        const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : 0;
-        const temp = (typeof data.temp === 'number') ? data.temp : 0;
-        const hum  = (typeof data.hum === 'number') ? data.hum : 0;
+        const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : null;
+        const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : null;
+        const temp = (typeof data.temp === 'number') ? data.temp : null;
+        const hum  = (typeof data.hum === 'number') ? data.hum : null;
 
         pushPoint(ts, raw, avg, temp, hum);
         document.getElementById('status').innerText = 'Última lectura: ' + new Date(ts*1000).toLocaleTimeString();
       } catch (e) {
         console.warn('JSON parse failed for line:', jsonStr, e);
+        appendDebug('JSON parse failed: ' + jsonStr + ' -> ' + (e && e.message ? e.message : e));
       }
     }
 
@@ -228,9 +277,9 @@ function handleDataNotification(event)
     pendingNotif = parts[parts.length - 1];
   } catch (err) {
     console.warn('notification parse error', err);
+    appendDebug('notification parse error: ' + (err && err.message ? err.message : err));
   }
 }
-
 
 /* send command via characteristic write */
 async function sendCmd(cmd) {
@@ -239,8 +288,10 @@ async function sendCmd(cmd) {
     const enc = new TextEncoder();
     await cmdChar.writeValue(enc.encode(cmd));
     document.getElementById('status').innerText = 'Comando enviado: ' + cmd;
+    appendDebug('CMD sent: ' + cmd);
   } catch (err) {
     console.error('sendCmd error', err);
+    appendDebug('sendCmd error: ' + (err && err.message ? err.message : err));
     document.getElementById('status').innerText = 'Error enviando cmd';
   }
 }
@@ -255,13 +306,25 @@ document.getElementById('btnConnect').addEventListener('click', async ()=> {
     }
     if (!navigator.bluetooth) { alert('Web Bluetooth no soportado. Usa Chrome Android.'); return; }
     await connectBLE();
-  } catch (e) { console.error('btnConnect error', e); }
+  } catch (e) { console.error('btnConnect error', e); appendDebug('btnConnect error: ' + e); }
 });
 
 document.getElementById('btnSnap').addEventListener('click', ()=> sendCmd('SNAP'));
 document.getElementById('btnCalibMQ').addEventListener('click', ()=> { if (confirm('Calibrar MQ en AIRE LIMPIO?')) sendCmd('MQ'); });
 document.getElementById('btnCalibEnv').addEventListener('click', ()=> { if (confirm('Calibrar Temp/Hum?')) sendCmd('ENV'); });
 document.getElementById('btnCalibAll').addEventListener('click', ()=> { if (confirm('Calibrar TODO (MQ + Temp/Hum)?')) sendCmd('ALL'); });
+
+document.getElementById('btnTestData').addEventListener('click', ()=> {
+  // añade un punto de prueba (aleatorio)
+  const ts = Math.floor(Date.now()/1000);
+  const r = Math.floor(Math.random()*1000);
+  const a = Math.floor(Math.random()*1000);
+  const t = (20 + Math.random()*10).toFixed(2);
+  const h = (30 + Math.random()*40).toFixed(2);
+  pushPoint(ts, r, a, Number(t), Number(h));
+  document.getElementById('status').innerText = 'Test point added';
+  appendDebug('Test point added: ' + ts + ' r=' + r + ' a=' + a + ' t=' + t + ' h=' + h);
+});
 
 /* init */
 makeCharts();
@@ -271,4 +334,3 @@ window.addEventListener('beforeunload', () => { try { if (device && device.gatt 
 </script>
 </body>
 </html>
-
