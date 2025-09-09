@@ -142,23 +142,16 @@ function onDisconnected(evt) {
   console.log('Device disconnected (onDisconnected)', evt);
   document.getElementById('status').innerText = 'Desconectado';
   setButtonsConnected(false);
-  // limpiar referencias para que un nuevo connect funcione correctamente
   try {
     if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
   } catch (e) {}
-  device = null;
-  server = null;
-  service = null;
-  dataChar = null;
-  cmdChar = null;
+  device = null; server = null; service = null; dataChar = null; cmdChar = null;
 }
 
 /* ---------- BLE: conexión, notifs, comandos ---------- */
 async function connectBLE() {
   try {
     document.getElementById('status').innerText = 'Buscando PyroPrev (BLE)...';
-
-    // Intentar con filtro (mejor), si no funciona cambia a acceptAllDevices (fallback)
     try {
       device = await navigator.bluetooth.requestDevice({
         filters: [{ namePrefix: 'PyroPrev' }],
@@ -173,25 +166,20 @@ async function connectBLE() {
     }
 
     if (!device) {
-      document.getElementById('status').innerText = 'No se seleccionó ningún dispositivo';
+      document.getElementById('status').innerText = 'No se seleccionó dispositivo';
       return;
     }
 
-    // manejar desconexión
     device.addEventListener('gattserverdisconnected', onDisconnected);
 
     document.getElementById('status').innerText = 'Conectando...';
     server = await device.gatt.connect();
-
-    // debug info
     console.log('GATT connected:', server.connected, 'device:', device.name, device.id);
 
     service = await server.getPrimaryService(SERVICE_UUID);
-
     dataChar = await service.getCharacteristic(DATA_UUID);
     cmdChar  = await service.getCharacteristic(CMD_UUID);
 
-    // iniciar notificaciones
     try {
       await dataChar.startNotifications();
       dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
@@ -216,28 +204,19 @@ async function connectBLE() {
 /* handleDataNotification - decoding robusto */
 function handleDataNotification(event) {
   try {
-    // event.target.value is a DataView or BluetoothRemoteGATTCharacteristicValueEvent
-    const value = event.target.value;
-    let jsonStr = '';
+    const value = event.target.value; // DataView
+    if (!value) return;
 
-    // Try direct buffer decode
-    if (value && value.buffer) {
-      jsonStr = new TextDecoder().decode(value.buffer);
-    } else {
-      // fallback: build Uint8Array
-      const arr = new Uint8Array(value.byteLength || 0);
-      for (let i=0;i<(value.byteLength || 0);i++) arr[i] = value.getUint8(i);
-      jsonStr = new TextDecoder().decode(arr);
-    }
+    // decode the exact bytes of the DataView (respect byteOffset/byteLength)
+    const arr = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    const jsonStr = new TextDecoder().decode(arr);
 
-    // quick sanity
     if (!jsonStr || jsonStr.length < 2) return;
 
     console.log('Notification raw:', jsonStr);
 
     const data = JSON.parse(jsonStr);
 
-    // actualizar baseline/threshold si vienen
     if (typeof data.baseline === 'number') baseline = data.baseline;
     if (typeof data.threshold === 'number') threshold = data.threshold;
 
@@ -260,7 +239,6 @@ async function sendCmd(cmd) {
   try {
     const enc = new TextEncoder();
     await cmdChar.writeValue(enc.encode(cmd));
-    // feedback
     document.getElementById('status').innerText = 'Comando enviado: ' + cmd;
   } catch (err) {
     console.error('sendCmd error', err);
@@ -270,11 +248,9 @@ async function sendCmd(cmd) {
 
 /* ---------- UI wiring ---------- */
 document.getElementById('btnConnect').addEventListener('click', async ()=> {
-  // toggle: si ya hay conexión, desconectar; si no, conectar
   try {
     if (device && device.gatt && device.gatt.connected) {
       device.gatt.disconnect();
-      // onDisconnected handler will run
       document.getElementById('status').innerText = 'Desconectando...';
       return;
     }
@@ -303,11 +279,9 @@ document.getElementById('btnCalibAll').addEventListener('click', ()=> {
 makeCharts();
 setButtonsConnected(false);
 
-// desconectar al cerrar la pestaña (limpia publicidad BLE y conexiones)
 window.addEventListener('beforeunload', () => {
   try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){}
 });
-
 </script>
 </body>
 </html>
