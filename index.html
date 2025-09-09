@@ -5,10 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>PyroPrev BLE Monitor</title>
 
-  <!-- Chart.js desde CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-  <!-- PWA manifest -->
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#2b7cff"/>
 
@@ -48,18 +45,15 @@
   <div class="card"><h4>Humedad (%)</h4><canvas id="hChart" height="120"></canvas></div>
 
   <footer>
-    Página web de Arti Technologies. 
-    Copyright 2025. 
-    Funciones de I+D.
+    Página web de Arti Technologies. Copyright 2025.
   </footer>
 
 <script>
-/* ---------- CONFIG (coincidir con ESP32) ---------- */
+/* CONFIG */
 const SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
 const DATA_UUID    = '12345678-1234-5678-1234-56789abcdef1';
 const CMD_UUID     = '12345678-1234-5678-1234-56789abcdef2';
 
-/* ---------- ESTADO ---------- */
 let device = null;
 let server = null;
 let service = null;
@@ -71,7 +65,7 @@ const MAX_POINTS = 200;
 let labels = [], mqRawArr = [], mqAvgArr = [], tempArr = [], humArr = [];
 let baseline = 0, threshold = 0;
 
-/* ---------- GRÁFICOS ---------- */
+/* Charts */
 function makeCharts(){
   const ctxM = document.getElementById('mqChart').getContext('2d');
   mqChart = new Chart(ctxM, {
@@ -113,7 +107,6 @@ function pushPoint(ts, raw, avg, t, h) {
   if (labels.length > MAX_POINTS) {
     labels.shift(); mqRawArr.shift(); mqAvgArr.shift(); tempArr.shift(); humArr.shift();
   }
-  // actualizar baseline/threshold
   const n = labels.length;
   mqChart.data.datasets[2].data = Array(n).fill(baseline);
   mqChart.data.datasets[3].data = Array(n).fill(threshold);
@@ -123,32 +116,26 @@ function pushPoint(ts, raw, avg, t, h) {
   hChart.update();
 }
 
-/* ---------- UI helpers ---------- */
+/* UI helpers */
 function setButtonsConnected(connected) {
   document.getElementById('btnSnap').disabled = !connected;
   document.getElementById('btnCalibMQ').disabled = !connected;
   document.getElementById('btnCalibEnv').disabled = !connected;
   document.getElementById('btnCalibAll').disabled = !connected;
   const btnConnect = document.getElementById('btnConnect');
-  if (connected) {
-    btnConnect.innerText = 'Desconectar';
-  } else {
-    btnConnect.innerText = 'Conectar BLE';
-  }
+  btnConnect.innerText = connected ? 'Desconectar' : 'Conectar BLE';
 }
 
-/* ---------- desconexión ---------- */
+/* disconnect handler */
 function onDisconnected(evt) {
-  console.log('Device disconnected (onDisconnected)', evt);
+  console.log('Device disconnected', evt);
   document.getElementById('status').innerText = 'Desconectado';
   setButtonsConnected(false);
-  try {
-    if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
-  } catch (e) {}
+  try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){}
   device = null; server = null; service = null; dataChar = null; cmdChar = null;
 }
 
-/* ---------- BLE: conexión, notifs, comandos ---------- */
+/* connect + start notifications */
 async function connectBLE() {
   try {
     document.getElementById('status').innerText = 'Buscando PyroPrev (BLE)...';
@@ -158,42 +145,28 @@ async function connectBLE() {
         optionalServices: [SERVICE_UUID]
       });
     } catch (errFilter) {
-      console.warn('No encontrado con filtro, reintentando con acceptAllDevices', errFilter);
+      console.warn('Filtro no encontró dispositivo, reintentando acceptAllDevices', errFilter);
       device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [SERVICE_UUID]
       });
     }
-
-    if (!device) {
-      document.getElementById('status').innerText = 'No se seleccionó dispositivo';
-      return;
-    }
-
+    if (!device) { document.getElementById('status').innerText = 'No se seleccionó dispositivo'; return; }
     device.addEventListener('gattserverdisconnected', onDisconnected);
-
     document.getElementById('status').innerText = 'Conectando...';
     server = await device.gatt.connect();
-    console.log('GATT connected:', server.connected, 'device:', device.name, device.id);
+    console.log('GATT connected:', server.connected, device.name, device.id);
 
     service = await server.getPrimaryService(SERVICE_UUID);
     dataChar = await service.getCharacteristic(DATA_UUID);
     cmdChar  = await service.getCharacteristic(CMD_UUID);
 
-    try {
-      await dataChar.startNotifications();
-      dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
-      console.log('startNotifications OK on dataChar');
-    } catch (errStart) {
-      console.error('startNotifications failed:', errStart);
-      document.getElementById('status').innerText = 'Error startNotifications: ' + (errStart && errStart.message ? errStart.message : errStart);
-      setButtonsConnected(false);
-      return;
-    }
+    await dataChar.startNotifications();
+    dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
+    console.log('startNotifications OK on dataChar');
 
     document.getElementById('status').innerText = 'Conectado: ' + (device.name || '(sin nombre)');
     setButtonsConnected(true);
-    console.log('BLE fully connected and notifications started.');
   } catch (err) {
     console.error('connectBLE error', err);
     document.getElementById('status').innerText = 'Error conexión: ' + (err && err.message ? err.message : err);
@@ -201,22 +174,17 @@ async function connectBLE() {
   }
 }
 
-/* handleDataNotification - decoding robusto */
+/* decode notification robustamente */
 function handleDataNotification(event) {
   try {
-    const value = event.target.value; // DataView
+    const value = event.target.value;
     if (!value) return;
-
-    // decode the exact bytes of the DataView (respect byteOffset/byteLength)
     const arr = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     const jsonStr = new TextDecoder().decode(arr);
-
     if (!jsonStr || jsonStr.length < 2) return;
-
     console.log('Notification raw:', jsonStr);
 
     const data = JSON.parse(jsonStr);
-
     if (typeof data.baseline === 'number') baseline = data.baseline;
     if (typeof data.threshold === 'number') threshold = data.threshold;
 
@@ -233,7 +201,7 @@ function handleDataNotification(event) {
   }
 }
 
-/* sendCmd: escribe comando sencillo (MQ/ENV/ALL/SNAP) */
+/* send command via characteristic write */
 async function sendCmd(cmd) {
   if (!cmdChar) { console.warn('No cmd characteristic'); document.getElementById('status').innerText = 'Sin característica CMD'; return; }
   try {
@@ -246,7 +214,7 @@ async function sendCmd(cmd) {
   }
 }
 
-/* ---------- UI wiring ---------- */
+/* wiring UI */
 document.getElementById('btnConnect').addEventListener('click', async ()=> {
   try {
     if (device && device.gatt && device.gatt.connected) {
@@ -254,34 +222,20 @@ document.getElementById('btnConnect').addEventListener('click', async ()=> {
       document.getElementById('status').innerText = 'Desconectando...';
       return;
     }
-    if (!navigator.bluetooth) {
-      alert('Web Bluetooth no soportado en este navegador. Usa Chrome en Android.');
-      return;
-    }
+    if (!navigator.bluetooth) { alert('Web Bluetooth no soportado. Usa Chrome Android.'); return; }
     await connectBLE();
-  } catch (e) {
-    console.error('btnConnect error', e);
-  }
+  } catch (e) { console.error('btnConnect error', e); }
 });
 
 document.getElementById('btnSnap').addEventListener('click', ()=> sendCmd('SNAP'));
-document.getElementById('btnCalibMQ').addEventListener('click', ()=> {
-  if (confirm('Calibrar MQ en AIRE LIMPIO?')) sendCmd('MQ');
-});
-document.getElementById('btnCalibEnv').addEventListener('click', ()=> {
-  if (confirm('Calibrar Temp/Hum?')) sendCmd('ENV');
-});
-document.getElementById('btnCalibAll').addEventListener('click', ()=> {
-  if (confirm('Calibrar TODO (MQ + Temp/Hum)?')) sendCmd('ALL');
-});
+document.getElementById('btnCalibMQ').addEventListener('click', ()=> { if (confirm('Calibrar MQ en AIRE LIMPIO?')) sendCmd('MQ'); });
+document.getElementById('btnCalibEnv').addEventListener('click', ()=> { if (confirm('Calibrar Temp/Hum?')) sendCmd('ENV'); });
+document.getElementById('btnCalibAll').addEventListener('click', ()=> { if (confirm('Calibrar TODO (MQ + Temp/Hum)?')) sendCmd('ALL'); });
 
-/* ---------- Init ---------- */
+/* init */
 makeCharts();
 setButtonsConnected(false);
-
-window.addEventListener('beforeunload', () => {
-  try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){}
-});
+window.addEventListener('beforeunload', () => { try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){} });
 </script>
 </body>
 </html>
