@@ -178,7 +178,8 @@ async function connectBLE() {
 }
 
 /* handleDataNotification robusto: reensambla fragmentos usando '\n' como delimitador */
-function handleDataNotification(event) {
+function handleDataNotification(event) 
+{
   try {
     const value = event.target.value;
     if (!value) return;
@@ -186,8 +187,6 @@ function handleDataNotification(event) {
     // tomar bytes exactos (respetando byteOffset/byteLength)
     const arr = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     const fragment = new TextDecoder().decode(arr);
-    // DEBUG opcional
-    // console.log('Fragment received:', fragment);
 
     // append al buffer
     pendingNotif += fragment;
@@ -197,8 +196,15 @@ function handleDataNotification(event) {
 
     // procesar todas las líneas completas (todas menos la última)
     for (let i = 0; i < parts.length - 1; i++) {
-      const jsonStr = parts[i].trim();
+      let jsonStr = parts[i].trim();
       if (!jsonStr) continue;
+
+      // --- NUEVO: saneo de posibles valores ilegales ---
+      jsonStr = jsonStr
+        .replace(/\bNaN\b/gi, 'null')
+        .replace(/\bInfinity\b/gi, 'null')
+        .replace(/\b-Infinity\b/gi, 'null');
+
       try {
         const data = JSON.parse(jsonStr);
 
@@ -224,6 +230,7 @@ function handleDataNotification(event) {
     console.warn('notification parse error', err);
   }
 }
+
 
 /* send command via characteristic write */
 async function sendCmd(cmd) {
@@ -264,3 +271,4 @@ window.addEventListener('beforeunload', () => { try { if (device && device.gatt 
 </script>
 </body>
 </html>
+
