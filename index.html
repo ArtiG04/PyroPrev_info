@@ -65,6 +65,9 @@ const MAX_POINTS = 200;
 let labels = [], mqRawArr = [], mqAvgArr = [], tempArr = [], humArr = [];
 let baseline = 0, threshold = 0;
 
+/* BUFFER para reensamblar notificaciones fragmentadas */
+let pendingNotif = '';
+
 /* Charts */
 function makeCharts(){
   const ctxM = document.getElementById('mqChart').getContext('2d');
@@ -174,28 +177,49 @@ async function connectBLE() {
   }
 }
 
-/* decode notification robustamente */
+/* handleDataNotification robusto: reensambla fragmentos usando '\n' como delimitador */
 function handleDataNotification(event) {
   try {
     const value = event.target.value;
     if (!value) return;
+
+    // tomar bytes exactos (respetando byteOffset/byteLength)
     const arr = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-    const jsonStr = new TextDecoder().decode(arr);
-    if (!jsonStr || jsonStr.length < 2) return;
-    console.log('Notification raw:', jsonStr);
+    const fragment = new TextDecoder().decode(arr);
+    // DEBUG opcional
+    // console.log('Fragment received:', fragment);
 
-    const data = JSON.parse(jsonStr);
-    if (typeof data.baseline === 'number') baseline = data.baseline;
-    if (typeof data.threshold === 'number') threshold = data.threshold;
+    // append al buffer
+    pendingNotif += fragment;
 
-    const ts = (typeof data.ts === 'number') ? data.ts : Math.floor(Date.now()/1000);
-    const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : 0;
-    const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : 0;
-    const temp = (typeof data.temp === 'number') ? data.temp : 0;
-    const hum  = (typeof data.hum === 'number') ? data.hum : 0;
+    // split por newline. Las líneas completas serán procesadas; la última parte puede quedar incompleta.
+    const parts = pendingNotif.split('\n');
 
-    pushPoint(ts, raw, avg, temp, hum);
-    document.getElementById('status').innerText = 'Última lectura: ' + new Date(ts*1000).toLocaleTimeString();
+    // procesar todas las líneas completas (todas menos la última)
+    for (let i = 0; i < parts.length - 1; i++) {
+      const jsonStr = parts[i].trim();
+      if (!jsonStr) continue;
+      try {
+        const data = JSON.parse(jsonStr);
+
+        if (typeof data.baseline === 'number') baseline = data.baseline;
+        if (typeof data.threshold === 'number') threshold = data.threshold;
+
+        const ts = (typeof data.ts === 'number') ? data.ts : Math.floor(Date.now()/1000);
+        const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : 0;
+        const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : 0;
+        const temp = (typeof data.temp === 'number') ? data.temp : 0;
+        const hum  = (typeof data.hum === 'number') ? data.hum : 0;
+
+        pushPoint(ts, raw, avg, temp, hum);
+        document.getElementById('status').innerText = 'Última lectura: ' + new Date(ts*1000).toLocaleTimeString();
+      } catch (e) {
+        console.warn('JSON parse failed for line:', jsonStr, e);
+      }
+    }
+
+    // dejar en pendingNotif la parte incompleta (último elemento)
+    pendingNotif = parts[parts.length - 1];
   } catch (err) {
     console.warn('notification parse error', err);
   }
@@ -236,6 +260,7 @@ document.getElementById('btnCalibAll').addEventListener('click', ()=> { if (conf
 makeCharts();
 setButtonsConnected(false);
 window.addEventListener('beforeunload', () => { try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){} });
+
 </script>
 </body>
 </html>
