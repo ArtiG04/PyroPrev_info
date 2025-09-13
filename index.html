@@ -4,11 +4,9 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>PyroPrev BLE Monitor</title>
-
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#2b7cff"/>
-
   <style>
     body{font-family:Arial,Helvetica,sans-serif;margin:8px;background:#fafafa;color:#111}
     header{display:flex;align-items:center;gap:12px}
@@ -62,31 +60,22 @@ const SERVICE_UUID = '12345678-1234-5678-1234-56789abcdef0';
 const DATA_UUID    = '12345678-1234-5678-1234-56789abcdef1';
 const CMD_UUID     = '12345678-1234-5678-1234-56789abcdef2';
 
-let device = null;
-let server = null;
-let service = null;
-let dataChar = null;
-let cmdChar = null;
-
-let mqChart, tChart, hChart;
-const MAX_POINTS = 200;
-let labels = [], mqRawArr = [], mqAvgArr = [], tempArr = [], humArr = [];
-let baseline = 0, threshold = 0;
-
-/* BUFFER para reensamblar notificaciones fragmentadas */
+let device=null, server=null, service=null, dataChar=null, cmdChar=null;
 let pendingNotif = '';
 
-/* Debug UI */
-const debugBox = () => document.getElementById('debugBox');
-function appendDebug(msg) {
-  const box = debugBox();
+/* Charts */
+const MAX_POINTS = 200;
+let labels=[], mqRawArr=[], mqAvgArr=[], tempArr=[], humArr=[];
+let baseline=0, threshold=0;
+let mqChart, tChart, hChart;
+
+function appendDebug(msg){
+  const box = document.getElementById('debugBox');
   const time = new Date().toLocaleTimeString();
   box.textContent = `[${time}] ${msg}\n` + box.textContent;
-  // limitar tamaño
-  if (box.textContent.length > 20000) box.textContent = box.textContent.slice(0, 20000);
+  if (box.textContent.length > 20000) box.textContent = box.textContent.slice(0,20000);
 }
 
-/* Charts */
 function makeCharts(){
   const ctxM = document.getElementById('mqChart').getContext('2d');
   mqChart = new Chart(ctxM, {
@@ -94,243 +83,166 @@ function makeCharts(){
     data:{
       labels: labels,
       datasets:[
-        { label:'RAW_MQ',  data: mqRawArr, borderColor:'rgba(255,99,132,1)', fill:false, pointRadius:1, spanGaps:false },
-        { label:'AVG_MQ',  data: mqAvgArr, borderColor:'rgba(54,162,235,1)', fill:false, pointRadius:1, spanGaps:false },
-        { label:'BASELINE',data: [],       borderColor:'rgba(0,0,0,0.6)', borderDash:[6,4], fill:false, pointRadius:0, spanGaps:true },
-        { label:'THRESHOLD',data: [],      borderColor:'rgba(0,0,0,0.8)', borderDash:[2,2], fill:false, pointRadius:0, spanGaps:true }
+        { label:'RAW_MQ', data: mqRawArr, fill:false, pointRadius:1 },
+        { label:'AVG_MQ', data: mqAvgArr, fill:false, pointRadius:1 },
+        { label:'BASELINE', data: [], borderDash:[6,4], fill:false, pointRadius:0 },
+        { label:'THRESHOLD', data: [], borderDash:[2,2], fill:false, pointRadius:0 }
       ]
     },
-    options:{ animation:false, scales:{ x:{ display:true }, y:{ display:true } }, plugins:{legend:{display:true}}}
-  });
-
-  const ctxT = document.getElementById('tChart').getContext('2d');
-  tChart = new Chart(ctxT, {
-    type:'line',
-    data:{ labels: labels, datasets:[{ label:'Temp (°C)', data: tempArr, borderColor:'rgba(255,159,64,1)', fill:false, pointRadius:1, spanGaps:false }]},
     options:{ animation:false }
   });
 
-  const ctxH = document.getElementById('hChart').getContext('2d');
-  hChart = new Chart(ctxH, {
+  tChart = new Chart(document.getElementById('tChart').getContext('2d'), {
     type:'line',
-    data:{ labels: labels, datasets:[{ label:'Hum (%)', data: humArr, borderColor:'rgba(75,192,192,1)', fill:false, pointRadius:1, spanGaps:false }]},
+    data:{ labels: labels, datasets:[{ label:'Temp (°C)', data: tempArr, fill:false, pointRadius:1 }]},
+    options:{ animation:false }
+  });
+
+  hChart = new Chart(document.getElementById('hChart').getContext('2d'), {
+    type:'line',
+    data:{ labels: labels, datasets:[{ label:'Hum (%)', data: humArr, fill:false, pointRadius:1 }]},
     options:{ animation:false }
   });
 }
 
-function pushPoint(ts, raw, avg, t, h) {
-  // normalizar tipos: permitir null para temp/hum (Chart.js dibuja gap)
-  const rawNum = (raw === null || raw === undefined) ? null : Number(raw);
-  const avgNum = (avg === null || avg === undefined) ? null : Number(avg);
-  const tNum = (t === null || t === undefined) ? null : Number(t);
-  const hNum = (h === null || h === undefined) ? null : Number(h);
-
-  const tstr = new Date(ts*1000).toLocaleTimeString();
-  labels.push(tstr);
+function pushPoint(ts, raw, avg, t, h){
+  const rawNum = (raw==null)? null : Number(raw);
+  const avgNum = (avg==null)? null : Number(avg);
+  const tNum = (t==null)? null : Number(t);
+  const hNum = (h==null)? null : Number(h);
+  labels.push(new Date(ts*1000).toLocaleTimeString());
   mqRawArr.push(rawNum);
   mqAvgArr.push(avgNum);
   tempArr.push(tNum);
   humArr.push(hNum);
-
-  if (labels.length > MAX_POINTS) {
-    labels.shift();
-    mqRawArr.shift();
-    mqAvgArr.shift();
-    tempArr.shift();
-    humArr.shift();
-  }
-
+  if (labels.length > MAX_POINTS) { labels.shift(); mqRawArr.shift(); mqAvgArr.shift(); tempArr.shift(); humArr.shift(); }
   const n = labels.length;
   mqChart.data.datasets[2].data = Array(n).fill(baseline);
   mqChart.data.datasets[3].data = Array(n).fill(threshold);
-
-  // Forzar actualización eficiente
-  mqChart.update('none');
-  tChart.update('none');
-  hChart.update('none');
+  mqChart.update('none'); tChart.update('none'); hChart.update('none');
 }
 
 /* UI helpers */
-function setButtonsConnected(connected) {
+function setButtonsConnected(connected){
   document.getElementById('btnSnap').disabled = !connected;
   document.getElementById('btnCalibMQ').disabled = !connected;
   document.getElementById('btnCalibEnv').disabled = !connected;
   document.getElementById('btnCalibAll').disabled = !connected;
-  const btnConnect = document.getElementById('btnConnect');
-  btnConnect.innerText = connected ? 'Desconectar' : 'Conectar BLE';
+  document.getElementById('btnConnect').innerText = connected ? 'Desconectar' : 'Conectar BLE';
   document.getElementById('status').innerText = connected ? 'Conectado' : 'Desconectado';
 }
 
-/* disconnect handler */
-function onDisconnected(evt) {
-  console.log('Device disconnected', evt);
+function onDisconnected(){
   appendDebug('GATT disconnected');
-  document.getElementById('status').innerText = 'Desconectado';
   setButtonsConnected(false);
-  try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){}
-  device = null; server = null; service = null; dataChar = null; cmdChar = null;
+  device = server = service = dataChar = cmdChar = null;
 }
 
-/* connect + start notifications */
-async function connectBLE() {
-  try {
+/* Conectar BLE */
+async function connectBLE(){
+  try{
     document.getElementById('status').innerText = 'Buscando PyroPrev (BLE)...';
     try {
-      device = await navigator.bluetooth.requestDevice({
-        filters: [{ namePrefix: 'PyroPrev' }],
-        optionalServices: [SERVICE_UUID]
-      });
-    } catch (errFilter) {
-      console.warn('Filtro no encontró dispositivo, reintentando acceptAllDevices', errFilter);
+      device = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'PyroPrev' }], optionalServices: [SERVICE_UUID] });
+    } catch(e) {
       appendDebug('Filtro no encontró dispositivo, reintentando acceptAllDevices');
-      device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [SERVICE_UUID]
-      });
+      device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [SERVICE_UUID] });
     }
     if (!device) { document.getElementById('status').innerText = 'No se seleccionó dispositivo'; return; }
     device.addEventListener('gattserverdisconnected', onDisconnected);
     document.getElementById('status').innerText = 'Conectando...';
     server = await device.gatt.connect();
-    console.log('GATT connected:', server.connected, device.name, device.id);
     appendDebug('GATT connected: ' + (device.name||device.id));
-
     service = await server.getPrimaryService(SERVICE_UUID);
     dataChar = await service.getCharacteristic(DATA_UUID);
     cmdChar  = await service.getCharacteristic(CMD_UUID);
-
     await dataChar.startNotifications();
     dataChar.addEventListener('characteristicvaluechanged', handleDataNotification);
-    console.log('startNotifications OK on dataChar');
-    appendDebug('startNotifications OK on dataChar');
-
-    document.getElementById('status').innerText = 'Conectado: ' + (device.name || '(sin nombre)');
     setButtonsConnected(true);
+    document.getElementById('status').innerText = 'Conectado: ' + (device.name || '(sin nombre)');
   } catch (err) {
-    console.error('connectBLE error', err);
     appendDebug('connectBLE error: ' + (err && err.message ? err.message : err));
-    document.getElementById('status').innerText = 'Error conexión: ' + (err && err.message ? err.message : err);
     setButtonsConnected(false);
+    document.getElementById('status').innerText = 'Error conexión';
   }
 }
 
-/* handleDataNotification robusto: reensambla fragmentos usando '\n' como delimitador */
-function handleDataNotification(event) 
-{
+/* Reensamblado + parse robusto (separador '\n') */
+function handleDataNotification(event){
   try {
     const value = event.target.value;
     if (!value) return;
-
-    // tomar bytes exactos (respetando byteOffset/byteLength)
     const arr = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
     const fragment = new TextDecoder().decode(arr);
-
-    // DEBUG opcional: mostrar fragment si checkbox activado
-    if (document.getElementById('chkShowRaw').checked) {
-      appendDebug('Fragment (len=' + arr.length + '): ' + JSON.stringify(fragment));
-      console.log('Fragment received (len=' + arr.length + '):', fragment);
-    }
-
-    // append al buffer
+    if (document.getElementById('chkShowRaw').checked) appendDebug('Fragment (len=' + arr.length + '): ' + JSON.stringify(fragment));
     pendingNotif += fragment;
-
-    // split por newline. Las líneas completas serán procesadas; la última parte puede quedar incompleta.
     const parts = pendingNotif.split('\n');
-
-    // procesar todas las líneas completas (todas menos la última)
-    for (let i = 0; i < parts.length - 1; i++) {
+    for (let i = 0; i < parts.length - 1; i++){
       let jsonStr = parts[i].trim();
       if (!jsonStr) continue;
-
-      // --- saneo de posibles valores ilegales ---
-      jsonStr = jsonStr
-        .replace(/\bNaN\b/gi, 'null')
-        .replace(/\bInfinity\b/gi, 'null')
-        .replace(/\b-Infinity\b/gi, 'null');
-
-      // log sanitized line (si debug activo)
+      jsonStr = jsonStr.replace(/\bNaN\b/gi,'null').replace(/\bInfinity\b/gi,'null').replace(/\b-Infinity\b/gi,'null');
       if (document.getElementById('chkShowRaw').checked) appendDebug('Sanitized: ' + jsonStr);
-
       try {
         const data = JSON.parse(jsonStr);
-        if (document.getElementById('chkShowRaw').checked) console.log('Parsed data:', data);
-
         if (typeof data.baseline === 'number') baseline = data.baseline;
         if (typeof data.threshold === 'number') threshold = data.threshold;
-
-        // mantener null para temp/hum si no son números (Chart.js dibuja gaps)
         const ts = (typeof data.ts === 'number') ? data.ts : Math.floor(Date.now()/1000);
-        const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : null;
-        const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : null;
-        const temp = (typeof data.temp === 'number') ? data.temp : null;
-        const hum  = (typeof data.hum === 'number') ? data.hum : null;
-
-        pushPoint(ts, raw, avg, temp, hum);
+        pushPoint(ts, (typeof data.mqRaw === 'number')? data.mqRaw : null,
+                     (typeof data.mqAvg === 'number')? data.mqAvg : null,
+                     (typeof data.temp === 'number')? data.temp : null,
+                     (typeof data.hum === 'number')? data.hum : null);
         document.getElementById('status').innerText = 'Última lectura: ' + new Date(ts*1000).toLocaleTimeString();
       } catch (e) {
-        console.warn('JSON parse failed for line:', jsonStr, e);
         appendDebug('JSON parse failed: ' + jsonStr + ' -> ' + (e && e.message ? e.message : e));
       }
     }
-
-    // dejar en pendingNotif la parte incompleta (último elemento)
     pendingNotif = parts[parts.length - 1];
   } catch (err) {
-    console.warn('notification parse error', err);
     appendDebug('notification parse error: ' + (err && err.message ? err.message : err));
   }
 }
 
-/* send command via characteristic write */
-async function sendCmd(cmd) {
-  if (!cmdChar) { console.warn('No cmd characteristic'); document.getElementById('status').innerText = 'Sin característica CMD'; return; }
+/* Enviar comando (write) */
+async function sendCmd(cmd){
+  if (!cmdChar) { appendDebug('No cmd characteristic'); document.getElementById('status').innerText='Sin CMD'; return; }
   try {
     const enc = new TextEncoder();
     await cmdChar.writeValue(enc.encode(cmd));
-    document.getElementById('status').innerText = 'Comando enviado: ' + cmd;
     appendDebug('CMD sent: ' + cmd);
+    document.getElementById('status').innerText = 'Comando enviado: ' + cmd;
   } catch (err) {
-    console.error('sendCmd error', err);
     appendDebug('sendCmd error: ' + (err && err.message ? err.message : err));
     document.getElementById('status').innerText = 'Error enviando cmd';
   }
 }
 
-/* wiring UI */
+/* Wiring UI */
 document.getElementById('btnConnect').addEventListener('click', async ()=> {
   try {
-    if (device && device.gatt && device.gatt.connected) {
-      device.gatt.disconnect();
-      document.getElementById('status').innerText = 'Desconectando...';
-      return;
-    }
+    if (device && device.gatt && device.gatt.connected) { device.gatt.disconnect(); document.getElementById('status').innerText='Desconectando...'; return; }
     if (!navigator.bluetooth) { alert('Web Bluetooth no soportado. Usa Chrome Android.'); return; }
     await connectBLE();
-  } catch (e) { console.error('btnConnect error', e); appendDebug('btnConnect error: ' + e); }
+  } catch (e) { appendDebug('btnConnect error: ' + e); }
 });
-
 document.getElementById('btnSnap').addEventListener('click', ()=> sendCmd('SNAP'));
 document.getElementById('btnCalibMQ').addEventListener('click', ()=> { if (confirm('Calibrar MQ en AIRE LIMPIO?')) sendCmd('MQ'); });
 document.getElementById('btnCalibEnv').addEventListener('click', ()=> { if (confirm('Calibrar Temp/Hum?')) sendCmd('ENV'); });
 document.getElementById('btnCalibAll').addEventListener('click', ()=> { if (confirm('Calibrar TODO (MQ + Temp/Hum)?')) sendCmd('ALL'); });
-
 document.getElementById('btnTestData').addEventListener('click', ()=> {
-  // añade un punto de prueba (aleatorio)
   const ts = Math.floor(Date.now()/1000);
   const r = Math.floor(Math.random()*1000);
   const a = Math.floor(Math.random()*1000);
   const t = (20 + Math.random()*10).toFixed(2);
   const h = (30 + Math.random()*40).toFixed(2);
   pushPoint(ts, r, a, Number(t), Number(h));
-  document.getElementById('status').innerText = 'Test point added';
   appendDebug('Test point added: ' + ts + ' r=' + r + ' a=' + a + ' t=' + t + ' h=' + h);
+  document.getElementById('status').innerText = 'Test point added';
 });
 
 /* init */
 makeCharts();
 setButtonsConnected(false);
-window.addEventListener('beforeunload', () => { try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){} });
-
+window.addEventListener('beforeunload', ()=> { try { if (device && device.gatt && device.gatt.connected) device.gatt.disconnect(); } catch(e){} });
 </script>
 </body>
 </html>
