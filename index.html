@@ -19,6 +19,7 @@
     .card{margin-bottom:12px}
     footer{font-size:12px;margin-top:10px;color:#666}
     .debug-box{white-space:pre-wrap;font-family:monospace;background:#fff;border:1px solid #eee;padding:8px;height:120px;overflow:auto;border-radius:6px;margin-top:8px}
+    .value-inline { font-weight:700; margin-left:8px; color:#333; font-size:0.95rem;}
   </style>
 </head>
 <body>
@@ -41,9 +42,29 @@
     <span class="status" id="status">Desconectado</span>
   </div>
 
-  <div class="card"><h4>MQ (RAW + AVG)</h4><canvas id="mqChart" height="180"></canvas></div>
-  <div class="card"><h4>Temperatura (°C)</h4><canvas id="tChart" height="120"></canvas></div>
-  <div class="card"><h4>Humedad (%)</h4><canvas id="hChart" height="120"></canvas></div>
+  <div class="card">
+    <h4>
+      MQ (RAW + AVG)
+      <span class="value-inline" id="rawNow">RAW: —</span>
+    </h4>
+    <canvas id="mqChart" height="180"></canvas>
+  </div>
+
+  <div class="card">
+    <h4>
+      Temperatura (°C)
+      <span class="value-inline" id="tempNow">— °C</span>
+    </h4>
+    <canvas id="tChart" height="120"></canvas>
+  </div>
+
+  <div class="card">
+    <h4>
+      Humedad (%)
+      <span class="value-inline" id="humNow">— %</span>
+    </h4>
+    <canvas id="hChart" height="120"></canvas>
+  </div>
 
   <div style="margin-top:8px">
     <strong>Debug (últimos fragments):</strong>
@@ -64,7 +85,7 @@ let device=null, server=null, service=null, dataChar=null, cmdChar=null;
 let pendingNotif = '';
 
 /* Charts */
-const MAX_POINTS = 200;
+const MAX_POINTS = 50; // <-- mostrar sólo últimas 50 muestras
 let labels=[], mqRawArr=[], mqAvgArr=[], tempArr=[], humArr=[];
 let baseline=0, threshold=0;
 let mqChart, tChart, hChart;
@@ -83,43 +104,71 @@ function makeCharts(){
     data:{
       labels: labels,
       datasets:[
-        { label:'RAW_MQ', data: mqRawArr, fill:false, pointRadius:1 },
-        { label:'AVG_MQ', data: mqAvgArr, fill:false, pointRadius:1 },
-        { label:'BASELINE', data: [], borderDash:[6,4], fill:false, pointRadius:0 },
-        { label:'THRESHOLD', data: [], borderDash:[2,2], fill:false, pointRadius:0 }
+        { label:'RAW', data: mqRawArr, fill:false, pointRadius:1 },
+        { label:'AVG', data: mqAvgArr, fill:false, pointRadius:1 },
+        { label:'BL', data: [], borderDash:[6,4], fill:false, pointRadius:0 },
+        { label:'THD', data: [], borderDash:[2,2], fill:false, pointRadius:0 }
       ]
     },
-    options:{ animation:false }
+    options:{ animation:false, scales:{ x:{ display:true }, y:{ display:true } }, plugins:{legend:{display:true}}}
   });
 
   tChart = new Chart(document.getElementById('tChart').getContext('2d'), {
     type:'line',
     data:{ labels: labels, datasets:[{ label:'Temp (°C)', data: tempArr, fill:false, pointRadius:1 }]},
-    options:{ animation:false }
+    options:{ animation:false, scales:{ x:{ display:true }, y:{ display:true } }, plugins:{legend:{display:true}}}
   });
 
   hChart = new Chart(document.getElementById('hChart').getContext('2d'), {
     type:'line',
     data:{ labels: labels, datasets:[{ label:'Hum (%)', data: humArr, fill:false, pointRadius:1 }]},
-    options:{ animation:false }
+    options:{ animation:false, scales:{ x:{ display:true }, y:{ display:true } }, plugins:{legend:{display:true}}}
   });
 }
 
-function pushPoint(ts, raw, avg, t, h){
-  const rawNum = (raw==null)? null : Number(raw);
-  const avgNum = (avg==null)? null : Number(avg);
-  const tNum = (t==null)? null : Number(t);
-  const hNum = (h==null)? null : Number(h);
-  labels.push(new Date(ts*1000).toLocaleTimeString());
+function clampArrayToMax(arr){
+  while (arr.length > MAX_POINTS) arr.shift();
+}
+
+function pushPoint(ts, raw, avg, t, h) {
+  // normalizar tipos: permitir null para temp/hum (Chart.js dibuja gap)
+  const rawNum = (raw === null || raw === undefined) ? null : Number(raw);
+  const avgNum = (avg === null || avg === undefined) ? null : Number(avg);
+  const tNum = (t === null || t === undefined) ? null : Number(t);
+  const hNum = (h === null || h === undefined) ? null : Number(h);
+
+  const tstr = new Date(ts*1000).toLocaleTimeString();
+  labels.push(tstr);
   mqRawArr.push(rawNum);
   mqAvgArr.push(avgNum);
   tempArr.push(tNum);
   humArr.push(hNum);
-  if (labels.length > MAX_POINTS) { labels.shift(); mqRawArr.shift(); mqAvgArr.shift(); tempArr.shift(); humArr.shift(); }
+
+  // mantener sólo últimas MAX_POINTS muestras
+  clampArrayToMax(labels);
+  clampArrayToMax(mqRawArr);
+  clampArrayToMax(mqAvgArr);
+  clampArrayToMax(tempArr);
+  clampArrayToMax(humArr);
+
+  // actualizar BL/THD para que tengan la misma longitud
   const n = labels.length;
   mqChart.data.datasets[2].data = Array(n).fill(baseline);
   mqChart.data.datasets[3].data = Array(n).fill(threshold);
-  mqChart.update('none'); tChart.update('none'); hChart.update('none');
+
+  // actualizar valores actuales junto a los títulos
+  const rawNowEl = document.getElementById('rawNow');
+  const tempNowEl = document.getElementById('tempNow');
+  const humNowEl = document.getElementById('humNow');
+
+  rawNowEl.innerText = 'RAW: ' + (rawNum === null ? '—' : rawNum);
+  tempNowEl.innerText = (tNum === null ? '— °C' : (tNum.toFixed(2) + ' °C'));
+  humNowEl.innerText = (hNum === null ? '— %' : (hNum.toFixed(2) + ' %'));
+
+  // Forzar actualización eficiente
+  mqChart.update('none');
+  tChart.update('none');
+  hChart.update('none');
 }
 
 /* UI helpers */
