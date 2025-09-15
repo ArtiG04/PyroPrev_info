@@ -20,6 +20,9 @@
     footer{font-size:12px;margin-top:10px;color:#666}
     .debug-box{white-space:pre-wrap;font-family:monospace;background:#fff;border:1px solid #eee;padding:8px;height:120px;overflow:auto;border-radius:6px;margin-top:8px}
     .value-inline { font-weight:700; margin-left:8px; color:#333; font-size:0.95rem;}
+    .indicator { font-weight:700; margin-left:12px; font-size:0.9rem; color:#666 }
+    .indicator.yes { color: #c62828 }   /* rojo para YES */
+    .indicator.no { color: #666 }      /* gris para NO */
   </style>
 </head>
 <body>
@@ -45,7 +48,8 @@
   <div class="card">
     <h4>
       MQ (RAW + AVG)
-      <span class="value-inline" id="rawNow">RAW: —</span>
+      <span class="value-inline" id="rawNowValue">RAW: —</span>
+      <span id="rawIndicator" class="indicator no">SMOKE: NO</span>
     </h4>
     <canvas id="mqChart" height="180"></canvas>
   </div>
@@ -53,7 +57,8 @@
   <div class="card">
     <h4>
       Temperatura (°C)
-      <span class="value-inline" id="tempNow">— °C</span>
+      <span class="value-inline" id="tempNowValue">— °C</span>
+      <span id="tempIndicator" class="indicator no">FIRE: NO</span>
     </h4>
     <canvas id="tChart" height="120"></canvas>
   </div>
@@ -61,7 +66,8 @@
   <div class="card">
     <h4>
       Humedad (%)
-      <span class="value-inline" id="humNow">— %</span>
+      <span class="value-inline" id="humNowValue">— %</span>
+      <span id="humIndicator" class="indicator no">FIRE: NO</span>
     </h4>
     <canvas id="hChart" height="120"></canvas>
   </div>
@@ -130,8 +136,8 @@ function clampArrayToMax(arr){
   while (arr.length > MAX_POINTS) arr.shift();
 }
 
-function pushPoint(ts, raw, avg, t, h) {
-  // normalizar tipos: permitir null para temp/hum (Chart.js dibuja gap)
+/* pushPoint ahora recibe flags smoke y fire y actualiza colores/indicadores */
+function pushPoint(ts, raw, avg, t, h, smoke=false, fire=false) {
   const rawNum = (raw === null || raw === undefined) ? null : Number(raw);
   const avgNum = (avg === null || avg === undefined) ? null : Number(avg);
   const tNum = (t === null || t === undefined) ? null : Number(t);
@@ -144,28 +150,81 @@ function pushPoint(ts, raw, avg, t, h) {
   tempArr.push(tNum);
   humArr.push(hNum);
 
-  // mantener sólo últimas MAX_POINTS muestras
   clampArrayToMax(labels);
   clampArrayToMax(mqRawArr);
   clampArrayToMax(mqAvgArr);
   clampArrayToMax(tempArr);
   clampArrayToMax(humArr);
 
-  // actualizar BL/THD para que tengan la misma longitud
   const n = labels.length;
   mqChart.data.datasets[2].data = Array(n).fill(baseline);
   mqChart.data.datasets[3].data = Array(n).fill(threshold);
 
-  // actualizar valores actuales junto a los títulos
-  const rawNowEl = document.getElementById('rawNow');
-  const tempNowEl = document.getElementById('tempNow');
-  const humNowEl = document.getElementById('humNow');
+  // actualizar valores actuales junto a los títulos y aplicar color/indicadores
+  const rawNowEl = document.getElementById('rawNowValue');
+  const tempNowEl = document.getElementById('tempNowValue');
+  const humNowEl = document.getElementById('humNowValue');
+  const rawInd = document.getElementById('rawIndicator');
+  const tempInd = document.getElementById('tempIndicator');
+  const humInd = document.getElementById('humIndicator');
 
-  rawNowEl.innerText = 'RAW: ' + (rawNum === null ? '—' : rawNum);
-  tempNowEl.innerText = (tNum === null ? '— °C' : (tNum.toFixed(2) + ' °C'));
-  humNowEl.innerText = (hNum === null ? '— %' : (hNum.toFixed(2) + ' %'));
+  // RAW value & SMOKE
+  if (rawNum === null) {
+    rawNowEl.innerText = 'RAW: —';
+    rawNowEl.style.color = '#333';
+    rawInd.innerText = 'SMOKE: NO';
+    rawInd.className = 'indicator no';
+  } else {
+    rawNowEl.innerText = 'RAW: ' + rawNum;
+    if (threshold !== null && !isNaN(threshold) && rawNum > threshold) {
+      rawNowEl.style.color = '#c62828'; // rojo
+      rawInd.innerText = 'SMOKE: YES';
+      rawInd.className = 'indicator yes';
+    } else {
+      rawNowEl.style.color = '#333';
+      rawInd.innerText = 'SMOKE: NO';
+      rawInd.className = 'indicator no';
+    }
+  }
 
-  // Forzar actualización eficiente
+  // Temp value & FIRE (uses 'fire' flag from device)
+  if (tNum === null) {
+    tempNowEl.innerText = '— °C';
+    tempNowEl.style.color = '#333';
+    tempInd.innerText = 'FIRE: NO';
+    tempInd.className = 'indicator no';
+  } else {
+    tempNowEl.innerText = tNum.toFixed(2) + ' °C';
+    if (fire) {
+      tempNowEl.style.color = '#c62828';
+      tempInd.innerText = 'FIRE: YES';
+      tempInd.className = 'indicator yes';
+    } else {
+      tempNowEl.style.color = '#333';
+      tempInd.innerText = 'FIRE: NO';
+      tempInd.className = 'indicator no';
+    }
+  }
+
+  // Hum value & FIRE indicator (same flag)
+  if (hNum === null) {
+    humNowEl.innerText = '— %';
+    humNowEl.style.color = '#333';
+    humInd.innerText = 'FIRE: NO';
+    humInd.className = 'indicator no';
+  } else {
+    humNowEl.innerText = hNum.toFixed(2) + ' %';
+    if (fire) {
+      humNowEl.style.color = '#c62828';
+      humInd.innerText = 'FIRE: YES';
+      humInd.className = 'indicator yes';
+    } else {
+      humNowEl.style.color = '#333';
+      humInd.innerText = 'FIRE: NO';
+      humInd.className = 'indicator no';
+    }
+  }
+
   mqChart.update('none');
   tChart.update('none');
   hChart.update('none');
@@ -235,11 +294,16 @@ function handleDataNotification(event){
         const data = JSON.parse(jsonStr);
         if (typeof data.baseline === 'number') baseline = data.baseline;
         if (typeof data.threshold === 'number') threshold = data.threshold;
+
         const ts = (typeof data.ts === 'number') ? data.ts : Math.floor(Date.now()/1000);
-        pushPoint(ts, (typeof data.mqRaw === 'number')? data.mqRaw : null,
-                     (typeof data.mqAvg === 'number')? data.mqAvg : null,
-                     (typeof data.temp === 'number')? data.temp : null,
-                     (typeof data.hum === 'number')? data.hum : null);
+        const raw = (typeof data.mqRaw === 'number') ? data.mqRaw : null;
+        const avg = (typeof data.mqAvg === 'number') ? data.mqAvg : null;
+        const temp = (typeof data.temp === 'number') ? data.temp : null;
+        const hum  = (typeof data.hum === 'number') ? data.hum : null;
+        const smoke = (typeof data.smoke === 'boolean') ? data.smoke : ( (raw !== null && typeof threshold === 'number') ? (raw > threshold) : false );
+        const fire  = (typeof data.fire === 'boolean') ? data.fire : false;
+
+        pushPoint(ts, raw, avg, temp, hum, smoke, fire);
         document.getElementById('status').innerText = 'Última lectura: ' + new Date(ts*1000).toLocaleTimeString();
       } catch (e) {
         appendDebug('JSON parse failed: ' + jsonStr + ' -> ' + (e && e.message ? e.message : e));
@@ -283,7 +347,10 @@ document.getElementById('btnTestData').addEventListener('click', ()=> {
   const a = Math.floor(Math.random()*1000);
   const t = (20 + Math.random()*10).toFixed(2);
   const h = (30 + Math.random()*40).toFixed(2);
-  pushPoint(ts, r, a, Number(t), Number(h));
+  // heurística simple para test: smoke si r>threshold, fire false
+  const smoke = (r > threshold);
+  const fire = false;
+  pushPoint(ts, r, a, Number(t), Number(h), smoke, fire);
   appendDebug('Test point added: ' + ts + ' r=' + r + ' a=' + a + ' t=' + t + ' h=' + h);
   document.getElementById('status').innerText = 'Test point added';
 });
